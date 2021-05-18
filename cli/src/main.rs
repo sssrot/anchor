@@ -131,6 +131,12 @@ pub enum Command {
         #[clap(subcommand)]
         subcmd: ClusterCommand,
     },
+     /// start a local validator, build deploy program, and run any command
+    Run {
+        #[clap(long)]
+        stop_validator: bool,
+        command: Option<String>,
+    },
 }
 
 #[derive(Debug, Clap)]
@@ -236,6 +242,7 @@ fn main() -> Result<()> {
             yarn,
             file,
         } => test(skip_deploy, skip_local_validator, yarn, file),
+        Command::Run {stop_validator, command} => run(command, stop_validator),
         #[cfg(feature = "dev")]
         Command::Airdrop { url } => airdrop(url),
         Command::Cluster { subcmd } => cluster(subcmd),
@@ -910,6 +917,68 @@ fn write_idl(idl: &Idl, out: OutFile) -> Result<()> {
 enum OutFile {
     Stdout,
     File(PathBuf),
+}
+
+fn run(cmd: Option<String>, stop_validator: bool) -> Result<()> {
+    let cwd = std::env::current_dir();
+
+    with_workspace(|cfg, _path, _cargo| -> Result<()> {
+        build(None, false)?;
+        let validator_handle = Some(start_test_validator(cfg, Some(genesis_flags(cfg)?))?);
+
+        let deploy_result = _deploy(None, None)?;
+        let prog_ids = deploy_result.iter().map(|x| x.0.to_string()).collect::<Vec<_>>().join(",");
+
+        // Setup log reader.
+        let log_streams = stream_logs(&cfg.cluster.url());
+
+        
+        std::env::set_current_dir(cwd.unwrap())?; //use original work dir
+        
+        if let Some(cmd) = cmd {
+            let args: Vec<&str> = cmd.split(" ").collect();
+            let any_result = std::process::Command::new(args[0])
+                .args(&args[1..])//rest args
+                .env("PROGRAM_IDS", prog_ids.as_str())
+                .env("ANCHOR_PROVIDER_URL", cfg.cluster.url())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .output()
+                .map_err(anyhow::Error::from)
+                .with_context(|| "any");
+
+            match any_result {
+                Ok(exit) => {
+                    if !exit.status.success() {
+                        println!("exit status not success");
+                        std::process::exit(exit.status.code().unwrap());
+                    }
+                }
+                Err(err) => {
+                    println!("Failed to run test: {:#}", err)
+                }
+            }
+
+        }
+
+        if stop_validator {
+            // Check all errors and shut down.
+            if let Some(mut child) = validator_handle {
+                if let Err(err) = child.kill() {
+                    println!("Failed to kill subprocess {}: {}", child.id(), err);
+                }
+            }
+        } else {
+            println!("solana-test-validator keep running in background, to set env:");
+            println!("  export PROGRAM_IDS={}", prog_ids);
+        }
+        for mut child in log_streams? {
+            if let Err(err) = child.kill() {
+                println!("Failed to kill subprocess {}: {}", child.id(), err);
+            }
+        }
+        Ok(())
+    })
 }
 
 // Builds, deploys, and tests all workspace programs in a single command.

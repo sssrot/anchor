@@ -5,7 +5,7 @@ authors = ["armaniferrante <armaniferrante@gmail.com>"]
 edition = "2018"
 
 [[bin]]
-name = "anchor"
+name = "anchorx"
 path = "src/main.rs"
 
 [features]
