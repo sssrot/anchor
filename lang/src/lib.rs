@@ -21,6 +21,8 @@
 //!
 //! Presented here are the Rust primitives for building on Solana.
 
+#![feature(trivial_bounds)]
+
 extern crate self as anchor_lang;
 
 use bytemuck::{Pod, Zeroable};
